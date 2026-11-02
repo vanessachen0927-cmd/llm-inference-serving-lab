@@ -1,0 +1,16 @@
+model,device,batch_size,run,max_new_tokens,latency_ms,output_tokens,output_tokens_per_second
+distilgpt2,cuda,1,0,32,157.392,32,203.31
+distilgpt2,cuda,1,1,32,149.905,32,213.47
+distilgpt2,cuda,1,2,32,150.28,32,212.94
+distilgpt2,cuda,1,3,32,146.179,32,218.91
+distilgpt2,cuda,1,4,32,155.981,32,205.15
+distilgpt2,cuda,2,0,32,248.327,64,257.72
+distilgpt2,cuda,2,1,32,230.624,64,277.51
+distilgpt2,cuda,2,2,32,225.482,64,283.84
+distilgpt2,cuda,2,3,32,247.515,64,258.57
+distilgpt2,cuda,2,4,32,231.992,64,275.87
+distilgpt2,cuda,4,0,32,288.736,128,443.31
+distilgpt2,cuda,4,1,32,316.592,128,404.31
+distilgpt2,cuda,4,2,32,260.048,128,492.22
+distilgpt2,cuda,4,3,32,282.916,128,452.43
+distilgpt2,cuda,4,4,32,276.057,128,463.67
