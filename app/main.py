@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import json
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from threading import Lock
@@ -9,10 +11,14 @@ from time import perf_counter
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from app.backends import InferenceBackend, build_backend
 from app.batching import BatchScheduler, QueueFull, QueueTimeout, SchedulerClosed
+from app.observability import ServiceMetrics
+
+logger = logging.getLogger('inference_service')
 
 
 class GenerateRequest(BaseModel):
@@ -41,6 +47,7 @@ def create_app(backend: InferenceBackend | None = None, *,
              "total_failures": 0, "last_latency_ms": None,
              "batches_executed": 0, "last_batch_prompts": 0}
     metrics_lock = Lock()
+    telemetry = ServiceMetrics()
     wait_ms = float(os.getenv("BATCH_WINDOW_MS", "20")) if batch_window_ms is None else batch_window_ms
     max_queue = int(os.getenv("MAX_QUEUE_REQUESTS", "64")) if max_queue_requests is None else max_queue_requests
     timeout = float(os.getenv("INFERENCE_TIMEOUT_SECONDS", "30")) if timeout_seconds is None else timeout_seconds
@@ -48,6 +55,7 @@ def create_app(backend: InferenceBackend | None = None, *,
         raise ValueError("timeout_seconds must be positive")
 
     def on_batch(size: int, _elapsed_ms: float) -> None:
+        telemetry.observe_batch(size, _elapsed_ms / 1000)
         with metrics_lock:
             state["batches_executed"] += 1
             state["last_batch_prompts"] = size
@@ -57,7 +65,8 @@ def create_app(backend: InferenceBackend | None = None, *,
         if state["backend"] is None:
             state["backend"] = build_backend()
         scheduler = BatchScheduler(state["backend"], batch_window_ms=wait_ms,
-                                   max_queue_requests=max_queue, on_batch=on_batch)
+                                   max_queue_requests=max_queue, on_batch=on_batch,
+                                   on_queue_wait=telemetry.observe_wait)
         state["scheduler"] = scheduler
         try:
             yield
@@ -65,7 +74,7 @@ def create_app(backend: InferenceBackend | None = None, *,
             scheduler.close()
             state["scheduler"] = None
 
-    app = FastAPI(title="LLM Inference Serving Lab", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="LLM Inference Serving Lab", version="0.3.0", lifespan=lifespan)
 
     @app.get("/health")
     def health():
@@ -79,6 +88,12 @@ def create_app(backend: InferenceBackend | None = None, *,
                       "batches_executed", "last_batch_prompts")}
         scheduler = state["scheduler"]
         return {**stats, **(scheduler.snapshot() if scheduler else {"queue_depth": 0})}
+
+    @app.get("/metrics/prometheus")
+    def prometheus_metrics():
+        scheduler = state["scheduler"]
+        depth = scheduler.snapshot()["queue_depth"] if scheduler else 0
+        return Response(telemetry.render(depth), media_type="text/plain; version=0.0.4; charset=utf-8")
 
     @app.post("/generate", response_model=GenerateResponse)
     def generate(req: GenerateRequest):
@@ -95,16 +110,25 @@ def create_app(backend: InferenceBackend | None = None, *,
         except (QueueFull, SchedulerClosed) as exc:
             with metrics_lock:
                 state["total_failures"] += 1
+            telemetry.requests.labels(status="503").inc()
+            telemetry.request_seconds.observe(perf_counter() - started)
             raise HTTPException(503, str(exc)) from exc
         except QueueTimeout as exc:
             with metrics_lock:
                 state["total_failures"] += 1
+            telemetry.requests.labels(status="504").inc()
+            telemetry.request_seconds.observe(perf_counter() - started)
             raise HTTPException(504, str(exc)) from exc
         except Exception as exc:
+            logger.error(json.dumps({"event": "inference_failed", "error_type": type(exc).__name__, "batch_size": len(req.prompts)}))
             with metrics_lock:
                 state["total_failures"] += 1
+            telemetry.requests.labels(status="500").inc()
+            telemetry.request_seconds.observe(perf_counter() - started)
             raise HTTPException(500, "Inference failure; check server logs") from exc
         elapsed_ms = (perf_counter() - started) * 1000
+        telemetry.requests.labels(status="200").inc()
+        telemetry.request_seconds.observe(elapsed_ms / 1000)
         with metrics_lock:
             state["last_latency_ms"] = round(elapsed_ms, 3)
         tokens = sum(o.output_tokens for o in outputs)
