@@ -38,7 +38,8 @@ class Job:
 class BatchScheduler:
     def __init__(self, backend: InferenceBackend, *, max_batch_prompts: int = 8,
                  max_queue_requests: int = 64, batch_window_ms: float = 20,
-                 on_batch: Callable[[int, float], None] | None = None):
+                 on_batch: Callable[[int, float], None] | None = None,
+                 on_queue_wait: Callable[[list[float]], None] | None = None):
         if max_batch_prompts < 1 or max_queue_requests < 1 or batch_window_ms < 0:
             raise ValueError("invalid scheduler settings")
         self.backend = backend
@@ -46,6 +47,7 @@ class BatchScheduler:
         self.max_queue_requests = max_queue_requests
         self.window_seconds = batch_window_ms / 1000
         self.on_batch = on_batch
+        self.on_queue_wait = on_queue_wait
         self.cv = Condition()
         self.queue: deque[Job] = deque()
         self.closed = False
@@ -114,6 +116,8 @@ class BatchScheduler:
                     self.cv.wait(timeout=remaining)
             prompts = [prompt for job in batch for prompt in job.prompts]
             started = monotonic()
+            if self.on_queue_wait:
+                self.on_queue_wait([max(0, started - job.enqueued_at) for job in batch])
             try:
                 results = self.backend.generate(prompts, first.max_new_tokens)
                 if len(results) != len(prompts):
