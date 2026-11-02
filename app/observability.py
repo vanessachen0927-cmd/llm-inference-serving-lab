@@ -45,11 +45,12 @@ class ServiceMetrics:
             registry=self.registry,
         )
 
-    def observe_batch(self, prompts: int, elapsed_seconds: float,
-                      waits_seconds: list[float]) -> None:
+    def observe_batch(self, prompts: int, elapsed_seconds: float) -> None:
         self.batches.inc()
         self.batch_prompts.observe(prompts)
         self.batch_seconds.observe(elapsed_seconds)
+
+    def observe_wait(self, waits_seconds: list[float]) -> None:
         for wait in waits_seconds:
             self.queue_wait_seconds.observe(wait)
 
