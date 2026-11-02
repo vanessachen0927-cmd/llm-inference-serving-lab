@@ -2,7 +2,7 @@
 
 Early-career AI infrastructure portfolio project: **Python, PyTorch, Hugging Face Transformers, FastAPI, controlled batching, request validation, instrumentation, and reproducible GPU inference benchmarks.**
 
-> Status: starter implementation. API unit tests are CPU-only with a **fake backend**; real T4 GPU inference and performance observations are documented in results/. `distilgpt2` is a small baseline autoregressive language model, not a production serving engine. This project is educational, not an operational scalable service.
+> Status: educational inference-serving prototype. API unit tests are CPU-only with a **fake backend**; real T4 GPU inference and performance observations are documented in results/. `distilgpt2` is a small baseline autoregressive language model, not a production serving engine. This project is educational, not an operational scalable service.
 
 ## 1. Mac: run fast CPU-only API tests
 
@@ -29,7 +29,7 @@ curl -s http://127.0.0.1:8000/metrics
 !MODEL_DEVICE=cuda BACKEND=transformers MODEL_ID=distilgpt2 python -m scripts.benchmark --model distilgpt2 --device cuda --repeats 5 --max-new-tokens 32
 ```
 
-This downloads model weights from Hugging Face (internet needed); runtime availability and downloads are not guaranteed. The benchmark produces `results/inference_benchmark.csv` for batch sizes 1, 2 and 4; archive only *observed* results. A bounded dynamic request batching prototype is included on this development branch. KV-cache analysis, TTFT instrumentation, Diffusers and NCCL are **not yet implemented**.
+This downloads model weights from Hugging Face (internet needed); runtime availability and downloads are not guaranteed. The benchmark produces `results/inference_benchmark.csv` for batch sizes 1, 2 and 4; archive only *observed* results. Bounded dynamic request batching was merged in PR #2. KV-cache analysis, TTFT instrumentation, Diffusers and NCCL are **not yet implemented**.
 
 ## API
 
@@ -59,4 +59,20 @@ The `app/batching.py` scheduler queues concurrent `POST /generate` requests, com
 
 Configuration (per server process): `BATCH_WINDOW_MS=20`, `MAX_QUEUE_REQUESTS=64`, `INFERENCE_TIMEOUT_SECONDS=30`. HTTP `503` means queue full/closed and `504` means a request exceeded the wait limit; an already-running GPU kernel cannot be preempted. The `GET /metrics` endpoint additionally reports `batches_executed`, `last_batch_prompts`, `queue_depth` and `max_queue_requests`.
 
-For CPU-only validation: `python -m pytest -q`. The four new focused tests cover compatible concurrent requests, incompatible generation settings, queue full/timeout, and backend failures. **Real GPU dynamic-batching performance has not been measured yet**; initial fake-backend tests only verify scheduling and API behavior. This version does not implement continuous token-level batching, cross-process queue sharing, cancellation of in-flight GPU computation, streaming TTFT or durable production metrics.
+For CPU-only validation: `python -m pytest -q`. The four new focused tests cover compatible concurrent requests, incompatible generation settings, queue full/timeout, and backend failures. **Real GPU dynamic batching correctness was verified in Colab** (two HTTP 200 results combined into one actual Tesla T4 Transformer invocation); its multi-client throughput has not been benchmarked. This version does not implement continuous token-level batching, cross-process queue sharing, cancellation of in-flight GPU computation, streaming TTFT or durable production metrics.
+
+## Observability and HTTP load testing (PR #3)
+
+The development branch adds a **per-process** Prometheus text endpoint at `GET /metrics/prometheus` while retaining the original JSON `GET /metrics` endpoint. It reports request outcomes by HTTP status (200/500/503/504), HTTP request duration, actual backend batch execution duration, queue wait time, total backend batches, number of prompts per backend batch, and pending queue depth. Histograms use seconds and can be queried with Prometheus `histogram_quantile` for approximate p50/p95. These are per-process, volatile metrics—not a persistent production monitoring deployment.
+
+The service logs backend errors as structured JSON containing only event, exception type and prompt count, **not prompt contents**. All measurements are CPU fake-backend tested; a real GPU operational test is still recommended. `prometheus-client` is included in API dependencies.
+
+Run a local service with `BACKEND=fake python -m uvicorn app.main:app --port 8001`, then in another terminal:
+
+```bash
+curl -s http://127.0.0.1:8001/metrics/prometheus
+python -m scripts.load_test --url http://127.0.0.1:8001 --requests 30 --concurrency 4
+python -m pytest -q
+```
+
+The load probe only targets loopback hosts, caps request and concurrency counts, and prints completed-request p50/p95 **HTTP** latency, status codes, error rate and requests/sec. **Do not represent fake-backend load results as GPU inference performance.** When testing a real GPU, launch the same service with `BACKEND=transformers MODEL_DEVICE=cuda MODEL_ID=distilgpt2` on a CUDA machine and save the actual console output.
