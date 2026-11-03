@@ -76,3 +76,18 @@ python -m pytest -q
 ```
 
 The load probe only targets loopback hosts, caps request and concurrency counts, and prints completed-request p50/p95 **HTTP** latency, status codes, error rate and requests/sec. **Do not represent fake-backend load results as GPU inference performance.** When testing a real GPU, launch the same service with `BACKEND=transformers MODEL_DEVICE=cuda MODEL_ID=distilgpt2` on a CUDA machine and save the actual console output.
+
+## Docker CPU API deployment (PR #4)
+
+This container is intentionally **API-only with BACKEND=fake**, so it builds and runs without CUDA on Apple Silicon and GitHub Actions. It tests deployment, health checks, the non-root process and HTTP monitoring. It is **not GPU inference** and its performance is not evidence of GPU throughput. The image installs only `requirements-api.txt`, not PyTorch or model weights.
+
+```bash
+docker build -t llm-inference-serving-lab:local .
+docker run -d --name llm-api -p 127.0.0.1:18000:8000 llm-inference-serving-lab:local
+docker inspect -f '{{.State.Health.Status}}' llm-api
+python scripts/docker_smoke_test.py --url http://127.0.0.1:18000
+docker logs llm-api
+docker rm -f llm-api
+```
+
+The container exposes `/health`, `/generate`, `/metrics` and `/metrics/prometheus`. The Dockerfile uses Python 3.11 slim, a non-root user, a built-in health check and a single Uvicorn worker so that the in-memory request queue and metrics remain process-local. The Docker CI workflow builds an image, waits until healthy and invokes the HTTP smoke test on an ephemeral container. Port 18000 avoids clashing with local development on 8000/8001. A separate CUDA-capable image/runtime and proper production security measures would be required to serve a real model from Docker.
