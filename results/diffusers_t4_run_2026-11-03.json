@@ -1,0 +1,21 @@
+{
+  "model": "segmind/tiny-sd",
+  "device": "cuda",
+  "gpu": "Tesla T4",
+  "torch_version": "2.11.0+cu130",
+  "transformers_version": "5.22.0",
+  "diffusers_version": "0.42.1",
+  "dtype": "float16",
+  "seed": 42,
+  "steps": 15,
+  "guidance_scale": 7.5,
+  "resolution": [
+    384,
+    384
+  ],
+  "latency_seconds": 5.474,
+  "peak_allocated_mib": 1386.78,
+  "peak_reserved_mib": 1664,
+  "image_path": "results/diffusers_sample.png",
+  "note": "One real image diffusion generation; model load excluded; not an LLM or throughput benchmark."
+}
