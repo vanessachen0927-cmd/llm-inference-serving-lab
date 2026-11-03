@@ -1,0 +1,31 @@
+name: Docker CPU service
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CPU inference API container
+        run: docker build --tag llm-inference-serving-lab:ci .
+      - name: Start container
+        run: docker run -d --name llm-api -p 127.0.0.1:18000:8000 llm-inference-serving-lab:ci
+      - name: Wait for Docker health check
+        run: |
+          for attempt in $(seq 1 30); do
+            status="$(docker inspect -f '{{.State.Health.Status}}' llm-api)"
+            if [ "$status" = "healthy" ]; then break; fi
+            if [ "$status" = "unhealthy" ]; then docker logs llm-api; exit 1; fi
+            sleep 2
+          done
+          test "$(docker inspect -f '{{.State.Health.Status}}' llm-api)" = "healthy"
+      - name: Smoke-test real HTTP endpoints
+        run: python scripts/docker_smoke_test.py --url http://127.0.0.1:18000
+      - name: Show logs if failed
+        if: failure()
+        run: docker logs llm-api || true
+      - name: Remove test container
+        if: always()
+        run: docker rm -f llm-api || true
