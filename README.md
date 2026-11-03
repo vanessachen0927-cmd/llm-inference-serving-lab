@@ -29,7 +29,7 @@ curl -s http://127.0.0.1:8000/metrics
 !MODEL_DEVICE=cuda BACKEND=transformers MODEL_ID=distilgpt2 python -m scripts.benchmark --model distilgpt2 --device cuda --repeats 5 --max-new-tokens 32
 ```
 
-This downloads model weights from Hugging Face (internet needed); runtime availability and downloads are not guaranteed. The benchmark produces `results/inference_benchmark.csv` for batch sizes 1, 2 and 4; archive only *observed* results. Bounded dynamic request batching was merged in PR #2. KV-cache analysis, TTFT instrumentation, Diffusers and NCCL are **not yet implemented**.
+This downloads model weights from Hugging Face (internet needed); runtime availability and downloads are not guaranteed. The benchmark produces `results/inference_benchmark.csv` for batch sizes 1, 2 and 4; archive only *observed* results. Bounded dynamic request batching was merged in PR #2. KV-cache analysis, TTFT instrumentation, and NCCL are **not yet implemented**. Diffusers has a CUDA inference demonstration on the PR #5 branch, pending real GPU execution.
 
 ## API
 
@@ -91,3 +91,18 @@ docker rm -f llm-api
 ```
 
 The container exposes `/health`, `/generate`, `/metrics` and `/metrics/prometheus`. The Dockerfile uses Python 3.11 slim, a non-root user, a built-in health check and a single Uvicorn worker so that the in-memory request queue and metrics remain process-local. The Docker CI workflow builds an image, waits until healthy and invokes the HTTP smoke test on an ephemeral container. Port 18000 avoids clashing with local development on 8000/8001. A separate CUDA-capable image/runtime and proper production security measures would be required to serve a real model from Docker.
+
+## Diffusers GPU experiment (PR #5, awaiting T4 execution)
+
+The dedicated script `scripts/diffusers_inference.py` uses the Hugging Face Diffusers `DiffusionPipeline` on **CUDA with float16**, an explicit random seed, and a lightweight text-to-image model (`segmind/tiny-sd`). It saves both a PNG and a JSON record of generation latency, peak PyTorch CUDA allocation, model name, seed, steps and library versions. **The Diffusers model has not yet been executed on a real GPU**, so do not claim a result until an actual Colab run succeeds.
+
+In free Colab with **T4 GPU** (cloning the PR branch), use:
+
+```python
+!pip -q install -r requirements-diffusers.txt
+!python -m scripts.diffusers_inference --steps 15 --width 384 --height 384
+from IPython.display import display, Image
+display(Image(filename="results/diffusers_sample.png"))
+```
+
+Use `python -m pytest -q` on CPU to test argument validation without downloading model weights. The image quality of a tiny baseline model does not establish production image quality. Model download/connectivity, dependency compatibility and T4 availability are runtime-dependent. The default output paths under `results/` are not automatically committed: save evidence only after successful execution. This is an image diffusion experiment; it does not implement optimized diffusers serving, dynamic image batching, or NCCL.
