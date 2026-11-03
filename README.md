@@ -107,12 +107,14 @@ display(Image(filename="results/diffusers_sample.png"))
 
 Use `python -m pytest -q` on CPU to test argument validation without downloading model weights. The image quality of a tiny baseline model does not establish production image quality. Model download/connectivity, dependency compatibility and T4 availability are runtime-dependent. The default output paths under `results/` are not automatically committed: save evidence only after successful execution. This is an image diffusion experiment; it does not implement optimized diffusers serving, dynamic image batching, or NCCL.
 
-## Distributed collectives — Gloo and NCCL (PR #6)
+## Distributed collectives — Gloo and NCCL (PR #6, validated limited modes)
 
 `scripts/distributed_allreduce.py` demonstrates distributed process-group setup and `all_reduce(SUM)` result validation. Each rank initializes its tensor with `rank + 1`, and each resulting tensor element must equal `world_size * (world_size + 1) / 2`. It supports these **distinct** validation modes:
 
 1. **Two-process Gloo on CPU:** proves correctness across two independent CPU processes (not NCCL). In a terminal with PyTorch installed, or Google Colab: `python -m torch.distributed.run --standalone --nproc_per_node=2 -m scripts.distributed_allreduce --backend gloo --elements 1024`.
 2. **One-process NCCL on one Tesla T4:** smoke-tests CUDA/NCCL initialization and the all-reduce API, but **cannot test inter-GPU communication**: `python -m torch.distributed.run --standalone --nproc_per_node=1 -m scripts.distributed_allreduce --backend nccl --elements 1024`.
 3. **Real two-GPU NCCL (only if two devices are allocated):** `python -m torch.distributed.run --standalone --nproc_per_node=2 -m scripts.distributed_allreduce --backend nccl --require-multi-gpu --elements 1024`. This cannot be run with a single T4 and should never be claimed without multi-GPU evidence.
+
+**Observed on November 3, 2026:** Both ranks passed the Gloo two-process correctness test on CPU (each returned 3.0), and one-rank NCCL successfully initialized and passed a CUDA all-reduce on one Tesla T4 (result 1.0). The single-GPU NCCL test was performed before the explicit-device mapping improvement, which has not yet been independently rechecked. See `results/gloo_two_process_2026-11-03.md` and `results/nccl_single_t4_2026-11-03.md` for outputs and limits.
 
 The command will print a JSON result with backend, world size, rank, correctness and a diagnostic elapsed time. Output is intended for learning and correctness, **not** GPU-to-GPU bandwidth benchmarking. On Colab install `requirements-ml.txt` first; the script imports PyTorch only during execution, so basic argument/unit tests remain CPU-only without adding torch to the CI test dependencies. This is a single-node example using `torchrun`, not cluster-scale orchestration or production distributed inference.
