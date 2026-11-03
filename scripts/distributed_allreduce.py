@@ -64,7 +64,8 @@ def run(args: argparse.Namespace) -> dict:
             raise RuntimeError("This PyTorch build has no Gloo support")
         device = torch.device("cpu")
     dist.init_process_group(backend=backend, init_method="env://",
-                            timeout=timedelta(seconds=120))
+                            timeout=timedelta(seconds=120),
+                            **({"device_id": device} if backend == "nccl" else {}))
     try:
         tensor = torch.full((args.elements,), float(rank + 1),
                             dtype=torch.float32, device=device)
