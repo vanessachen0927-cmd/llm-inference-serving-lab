@@ -29,7 +29,7 @@ curl -s http://127.0.0.1:8000/metrics
 !MODEL_DEVICE=cuda BACKEND=transformers MODEL_ID=distilgpt2 python -m scripts.benchmark --model distilgpt2 --device cuda --repeats 5 --max-new-tokens 32
 ```
 
-This downloads model weights from Hugging Face (internet needed); runtime availability and downloads are not guaranteed. The benchmark produces `results/inference_benchmark.csv` for batch sizes 1, 2 and 4; archive only *observed* results. Bounded dynamic request batching was merged in PR #2. KV-cache analysis, TTFT instrumentation, and NCCL are **not yet implemented**. Diffusers has a CUDA inference demonstration on the PR #5 branch, pending real GPU execution.
+This downloads model weights from Hugging Face (internet needed); runtime availability and downloads are not guaranteed. The benchmark produces `results/inference_benchmark.csv` for batch sizes 1, 2 and 4; archive only *observed* results. Bounded dynamic request batching was merged in PR #2. KV-cache analysis and TTFT instrumentation are **not yet implemented**. Real Diffusers inference on Tesla T4 is documented in PR #5; the NCCL all-reduce experiment is being developed in PR #6.
 
 ## API
 
@@ -92,9 +92,9 @@ docker rm -f llm-api
 
 The container exposes `/health`, `/generate`, `/metrics` and `/metrics/prometheus`. The Dockerfile uses Python 3.11 slim, a non-root user, a built-in health check and a single Uvicorn worker so that the in-memory request queue and metrics remain process-local. The Docker CI workflow builds an image, waits until healthy and invokes the HTTP smoke test on an ephemeral container. Port 18000 avoids clashing with local development on 8000/8001. A separate CUDA-capable image/runtime and proper production security measures would be required to serve a real model from Docker.
 
-## Diffusers GPU experiment (PR #5, awaiting T4 execution)
+## Diffusers GPU experiment (PR #5, Tesla T4 validated)
 
-The dedicated script `scripts/diffusers_inference.py` uses the Hugging Face Diffusers `DiffusionPipeline` on **CUDA with float16**, an explicit random seed, and a lightweight text-to-image model (`segmind/tiny-sd`). It saves both a PNG and a JSON record of generation latency, peak PyTorch CUDA allocation, model name, seed, steps and library versions. **The Diffusers model has not yet been executed on a real GPU**, so do not claim a result until an actual Colab run succeeds.
+The dedicated script `scripts/diffusers_inference.py` uses the Hugging Face Diffusers `DiffusionPipeline` on **CUDA with float16**, an explicit random seed, and a lightweight text-to-image model (`segmind/tiny-sd`). It saves both a PNG and a JSON record of generation latency, peak PyTorch CUDA allocation, model name, seed, steps and library versions. **Real Tesla T4 execution is validated**; see `results/diffusers_t4_experiment_2026-11-03.md` for measured results and limitations.
 
 In free Colab with **T4 GPU** (cloning the PR branch), use:
 
@@ -106,3 +106,15 @@ display(Image(filename="results/diffusers_sample.png"))
 ```
 
 Use `python -m pytest -q` on CPU to test argument validation without downloading model weights. The image quality of a tiny baseline model does not establish production image quality. Model download/connectivity, dependency compatibility and T4 availability are runtime-dependent. The default output paths under `results/` are not automatically committed: save evidence only after successful execution. This is an image diffusion experiment; it does not implement optimized diffusers serving, dynamic image batching, or NCCL.
+
+## Distributed collectives — Gloo and NCCL (PR #6, validated limited modes)
+
+`scripts/distributed_allreduce.py` demonstrates distributed process-group setup and `all_reduce(SUM)` result validation. Each rank initializes its tensor with `rank + 1`, and each resulting tensor element must equal `world_size * (world_size + 1) / 2`. It supports these **distinct** validation modes:
+
+1. **Two-process Gloo on CPU:** proves correctness across two independent CPU processes (not NCCL). In a terminal with PyTorch installed, or Google Colab: `python -m torch.distributed.run --standalone --nproc_per_node=2 -m scripts.distributed_allreduce --backend gloo --elements 1024`.
+2. **One-process NCCL on one Tesla T4:** smoke-tests CUDA/NCCL initialization and the all-reduce API, but **cannot test inter-GPU communication**: `python -m torch.distributed.run --standalone --nproc_per_node=1 -m scripts.distributed_allreduce --backend nccl --elements 1024`.
+3. **Real two-GPU NCCL (only if two devices are allocated):** `python -m torch.distributed.run --standalone --nproc_per_node=2 -m scripts.distributed_allreduce --backend nccl --require-multi-gpu --elements 1024`. This cannot be run with a single T4 and should never be claimed without multi-GPU evidence.
+
+**Observed on November 3, 2026:** Both ranks passed the Gloo two-process correctness test on CPU (each returned 3.0), and one-rank NCCL successfully initialized and passed a CUDA all-reduce on one Tesla T4 (result 1.0). The single-GPU NCCL test was performed before the explicit-device mapping improvement, which has not yet been independently rechecked. See `results/gloo_two_process_2026-11-03.md` and `results/nccl_single_t4_2026-11-03.md` for outputs and limits.
+
+The command will print a JSON result with backend, world size, rank, correctness and a diagnostic elapsed time. Output is intended for learning and correctness, **not** GPU-to-GPU bandwidth benchmarking. On Colab install `requirements-ml.txt` first; the script imports PyTorch only during execution, so basic argument/unit tests remain CPU-only without adding torch to the CI test dependencies. This is a single-node example using `torchrun`, not cluster-scale orchestration or production distributed inference.

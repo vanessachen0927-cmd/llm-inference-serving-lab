@@ -1,0 +1,16 @@
+{
+  "rank": 0,
+  "local_rank": 0,
+  "world_size": 1,
+  "backend": "nccl",
+  "device": "cuda:0",
+  "gpu_name": "Tesla T4",
+  "elements": 1024,
+  "expected_each_element": 1,
+  "observed_first_element": 1,
+  "correctness": "PASS",
+  "single_gpu_limitation": true,
+  "elapsed_ms_diagnostic_only": 0.287,
+  "torch_version": "2.11.0+cu130",
+  "note": "One-rank NCCL smoke test: no inter-GPU communication"
+}
